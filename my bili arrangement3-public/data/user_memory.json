@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "last_updated": "",
+  "semantic": {
+    "domains": {},
+    "global_constraints": [],
+    "active_domain": ""
+  },
+  "episodic": [],
+  "procedural": {},
+  "update_policy": {
+    "episodic_max_entries": 10,
+    "procedural_update_interval_days": 10
+  }
+}

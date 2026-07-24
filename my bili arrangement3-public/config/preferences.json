@@ -1,0 +1,12 @@
+{
+  "default_topic": "",
+  "default_scope": "mixed",
+  "default_freshness": "latest",
+  "default_days": 7,
+  "default_template": "auto",
+  "dedupe_window_days": 14,
+  "exclude_commercial": true,
+  "exclude_restricted": true,
+  "max_per_source": 20,
+  "search_limit": 50
+}

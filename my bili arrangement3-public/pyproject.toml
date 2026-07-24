@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bili-arrangement3"
+version = "0.1.0"
+description = "Multi-platform (Bilibili + YouTube) crawler and AI-driven topic arranger"
+requires-python = ">=3.9"
+
+[project.scripts]
+bili-arrangement3 = "bili_arrangement3.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
