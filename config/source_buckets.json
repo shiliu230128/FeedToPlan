@@ -1,0 +1,70 @@
+[
+  {
+    "id": "yoga",
+    "label": "瑜伽/健身",
+    "sources_file": "config/sources.json",
+    "keywords": [
+      "瑜伽",
+      "yoga",
+      "跟练",
+      "普拉提",
+      "pilates",
+      "健身",
+      "拉伸",
+      "冥想",
+      "meditation",
+      "kiyoga",
+      "yogini"
+    ],
+    "name_keywords": [
+      "瑜伽",
+      "yoga",
+      "pilates",
+      "健身"
+    ]
+  },
+  {
+    "id": "music_healing",
+    "label": "音乐/疗愈/冥想",
+    "sources_file": "config/sources_music.json",
+    "keywords": [
+      "疗愈",
+      "healing",
+      "颂钵",
+      "音疗",
+      "528",
+      "432",
+      "冥想",
+      "meditation",
+      "轻音乐",
+      "ambient",
+      "lofi",
+      "白噪音",
+      "bgm",
+      "playlist",
+      "歌单",
+      "音乐",
+      "music",
+      "reiki",
+      "灵气",
+      "频率",
+      "助眠",
+      "sleep"
+    ],
+    "name_keywords": [
+      "音乐",
+      "music",
+      "疗愈",
+      "healing",
+      "冥想",
+      "meditation",
+      "颂钵",
+      "lofi",
+      "chillhop",
+      "电台",
+      "radio",
+      "声音",
+      "sound"
+    ]
+  }
+]
