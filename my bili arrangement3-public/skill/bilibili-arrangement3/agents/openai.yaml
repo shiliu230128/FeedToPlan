@@ -1,4 +1,0 @@
-interface:
-  display_name: "Bilibili Arrangement 3"
-  short_description: "Collect Bilibili candidates and arrange them into a weekly plan"
-  default_prompt: "Use $bilibili-arrangement3 to collect Bilibili videos from follows, links, and keywords, then arrange them into a weekly plan."

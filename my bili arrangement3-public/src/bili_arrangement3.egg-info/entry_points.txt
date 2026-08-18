@@ -1,2 +1,0 @@
-[console_scripts]
-bili-arrangement3 = bili_arrangement3.cli:main
