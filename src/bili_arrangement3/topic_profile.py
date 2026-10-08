@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .models import Slot, slugify
+from .net import ssl_context
 
 
 # ---------------------------------------------------------------------------
@@ -736,7 +737,7 @@ def _generate_via_ai(topic: str, api_key: str) -> TopicProfile:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as resp:
         body = json.loads(resp.read().decode())
     content = body["choices"][0]["message"]["content"].strip()
     # Strip markdown fences if present

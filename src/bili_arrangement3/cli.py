@@ -12,24 +12,31 @@ from .crawler import UnifiedCrawler, parse_bvid, source_from_text
 from .crawler_bili import BiliCrawlerError
 from .filters import detect_follow_along, refresh_video_flags, requires_follow_along_filter
 from .models import CandidatePack, PlanRequest, Source, Video, dedupe_keep_order, slugify
-from .paths import cache_dir, config_dir, data_dir, project_root, runs_dir, secrets_dir
+from .paths import cache_dir, config_dir, data_dir, project_root, runs_dir, secrets_dir, source_sync_path
 from .planner import build_candidate_stats, draft_weekly_plan, select_slots
 from .prompts import WIZARD_PROMPT, build_ai_prompt
 from .render import render_brief_markdown, render_draft_markdown
 from .storage import (
+    SOURCE_REFRESH_EVERY_DAYS,
+    SOURCE_REFRESH_EVERY_RUNS,
+    bump_source_skipped,
     ensure_layout,
     load_json,
     load_preferences,
+    load_source_sync,
     load_sources,
     load_state,
     load_videos_jsonl,
+    mark_source_fetched,
     prune_recent_usage,
     recent_bvids,
     record_recent_usage,
     remove_inaccessible_bvids,
     save_json,
+    save_source_sync,
     save_sources,
     save_state,
+    source_is_due,
     upsert_source,
     upsert_videos_jsonl,
 )
@@ -54,6 +61,16 @@ DEFAULT_PREFERENCES_DATA = {
     "exclude_restricted": True,
     "max_per_source": 20,
     "search_limit": 50,
+    # Seconds to sleep before each HTTP request to Bilibili. This dominates
+    # wall-clock time on refresh runs (one request per candidate for the
+    # accessibility probe). Lower = faster but closer to the rate limit.
+    "http_pause_seconds": 0.8,
+    # Followed-UP crawl cadence: re-crawl a source when either threshold trips.
+    "source_refresh_every_runs": SOURCE_REFRESH_EVERY_RUNS,
+    "source_refresh_every_days": SOURCE_REFRESH_EVERY_DAYS,
+    # Relax the cadence when the locally cached pool yields fewer than this many
+    # qualifying candidates.
+    "min_candidates_before_refetch": 20,
 }
 
 DEFAULT_STATE_DATA = {
@@ -224,7 +241,7 @@ def add_workflow_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--keyword", action="append", default=[])
     parser.add_argument("--source", action="append", default=[])
     parser.add_argument("--save-source", action="store_true")
-    parser.add_argument("--refresh", action="store_true", help="Force a fresh crawl instead of using cache only")
+    parser.add_argument("--refresh", action="store_true", help="Re-crawl every followed source now, ignoring the run/day cadence")
     parser.add_argument("--offline", action="store_true", help="Skip Bilibili network calls and use the local cache only")
     parser.add_argument("--yt-key", default="", help="YouTube Data API v3 key (or set YT_API_KEY env var)")
     parser.add_argument("--ai-key", default="", help="OpenAI API key for dynamic topic profiles (or set OPENAI_API_KEY env var)")
@@ -355,6 +372,102 @@ def filter_videos_by_sources(videos: Sequence[Video], sources: Sequence[Source])
     return filtered
 
 
+def _filter_candidates(
+    videos: Sequence[Video],
+    request: PlanRequest,
+    recent: set,
+    topic_profile,
+    crawler: UnifiedCrawler,
+    offline: bool,
+    fresh_keys: set,
+) -> tuple[List[Video], Counter, set]:
+    """
+    Run the full hard-filter chain and return (eligible, removal_counter, stale_bvids).
+
+    The accessibility probe costs one network call per video, so it only runs for
+    videos actually fetched in this run (`fresh_keys`). Entries served from the
+    local cache were already validated when they were crawled, and get re-checked
+    the next time their source comes up for refresh.
+    """
+    eligible: List[Video] = []
+    removed: Counter = Counter()
+    stale_bvids: set = set()
+    require_follow_along = bool(topic_profile) and requires_follow_along_filter(topic_profile)
+    for video in videos:
+        # Match on the fingerprint the history actually stores, with the bare
+        # bvid as fallback for entries written before fingerprints existed.
+        if (video.fingerprint and video.fingerprint in recent) or (video.bvid and video.bvid in recent):
+            removed["recent"] += 1
+            continue
+        if request.exclude_restricted and video.restricted_access:
+            removed["restricted"] += 1
+            continue
+        if request.exclude_commercial and video.commercial:
+            removed["commercial"] += 1
+            continue
+        if request.duration_min and video.duration_minutes and video.duration_minutes < request.duration_min:
+            removed["duration_min"] += 1
+            continue
+        if request.duration_max and video.duration_minutes and video.duration_minutes > request.duration_max:
+            removed["duration_max"] += 1
+            continue
+        # Low-quality filter: skip videos with fewer plays than the threshold.
+        # Applies only when view_count is known (>0) to avoid filtering followed-UP content
+        # that may not yet have high counts. For search results, default is 100.
+        if request.min_view_count and video.view_count and video.view_count < request.min_view_count:
+            removed["low_quality"] += 1
+            continue
+        if require_follow_along:
+            follow_along, _notes = detect_follow_along(video, topic_profile)
+            if not follow_along:
+                removed["non_follow_along"] += 1
+                continue
+        # Space constraint enforcement: when user specifies posture (站立/坐姿),
+        # reject videos that don't explicitly declare a matching posture in title/desc.
+        if topic_profile and topic_profile.required_space_terms:
+            searchable = video.searchable_text()
+            if not any(term in searchable for term in topic_profile.required_space_terms):
+                removed["wrong_posture"] += 1
+                continue
+        # Accessibility check: skip videos that have been deleted or made private since crawl.
+        # Only for videos fetched from the network in this run — see the note where
+        # fresh_keys is built. Probing cached entries made every run pay one HTTP
+        # request per candidate, which defeated the whole source-refresh cadence.
+        if (
+            not offline
+            and video.platform == "bilibili"
+            and video.bvid
+            and video.fingerprint in fresh_keys
+        ):
+            if not crawler._bili.check_video_accessible(video.bvid):
+                removed["inaccessible"] += 1
+                stale_bvids.add(video.bvid)
+                continue
+        eligible.append(video)
+    return eligible, removed, stale_bvids
+
+
+def _order_sources_by_relevance(sources: Sequence[Source], topic: str) -> List[Source]:
+    """
+    Most topic-relevant followed sources first.
+
+    Used when the cadence has to be relaxed: rather than blindly re-crawling every
+    skipped source, spend the budget on the ones whose name/tags/notes overlap the
+    current topic, and stop as soon as enough candidates exist.
+    """
+    from .planner import tokenize
+
+    tokens = [token for token in tokenize(topic) if token]
+
+    def relevance(source: Source) -> int:
+        if not tokens:
+            return 0
+        haystack = f"{source.display_name} {' '.join(source.tags)} {source.notes}".lower()
+        return sum(1 for token in tokens if token.lower() in haystack)
+
+    return sorted(sources, key=relevance, reverse=True)
+
+
 def collect_pack(
     args: argparse.Namespace,
     request: Optional[PlanRequest] = None,
@@ -364,7 +477,12 @@ def collect_pack(
     prune_recent_usage(state, request.dedupe_window_days)
     cookie, cookie_source = resolve_cookie(args.cookie_file)
     yt_api_key = resolve_yt_api_key(getattr(args, "yt_key", "") or "")
-    crawler = UnifiedCrawler(bili_cookie=cookie, yt_api_key=yt_api_key)
+    # Preferences are read here rather than later so the HTTP throttle below can
+    # honour `http_pause_seconds`. Every request sleeps this long before firing,
+    # so it dominates wall-clock time on refresh runs.
+    preferences_data = load_preferences(args.preferences)
+    pause_seconds = float(preferences_data.get("http_pause_seconds", 0.8) or 0.8)
+    crawler = UnifiedCrawler(bili_cookie=cookie, yt_api_key=yt_api_key, pause_seconds=pause_seconds)
     offline = bool(getattr(args, "offline", False))
     persistent_sources = load_sources(args.sources)
     ad_hoc_sources = [source_from_text(value) for value in args.source]
@@ -391,10 +509,31 @@ def collect_pack(
     request.followed_mids = [s.mid for s in resolved_sources if s.mid]
     query_terms = dedupe_keep_order([request.topic, *request.keywords])
     raw_videos: List[Video] = []
+    fresh_keys: set = set()
     errors: List[str] = []
 
-    if not offline and request.scope in {"following", "mixed", "following-topic", "links"}:
-        for source in resolved_sources:
+    # ── Refresh gate ────────────────────────────────────────────────────────
+    # A followed UP is only re-crawled when it is "due": either N runs have
+    # passed since its last crawl or its last crawl is older than D days.
+    # Everything else is served from data/cache/videos.jsonl.
+    every_runs = int(preferences_data.get("source_refresh_every_runs", SOURCE_REFRESH_EVERY_RUNS) or 0)
+    every_days = int(preferences_data.get("source_refresh_every_days", SOURCE_REFRESH_EVERY_DAYS) or 0)
+    min_candidates = int(preferences_data.get("min_candidates_before_refetch", 20) or 0)
+    force_refresh = bool(getattr(args, "refresh", False))
+    sync_path = source_sync_path()
+    sync_state = load_source_sync(sync_path)
+
+    due_sources: List[Source] = []
+    skipped_sources: List[Source] = []
+    for source in resolved_sources:
+        if offline or force_refresh or source_is_due(sync_state.get(source.id), every_runs, every_days):
+            due_sources.append(source)
+        else:
+            skipped_sources.append(source)
+
+    def crawl_sources(sources: Sequence[Source], ok_ids: Optional[set] = None) -> None:
+        """Live-crawl each source's uploads; fall back to a scoped search on error."""
+        for source in sources:
             try:
                 if source.kind == "video" or source.bvid:
                     bvid = source.bvid or parse_bvid(source.url)
@@ -402,6 +541,8 @@ def collect_pack(
                         raw_videos.append(crawler.fetch_video(bvid, source))
                 elif source.kind == "up":
                     raw_videos.extend(crawler.fetch_up_videos(source, max_per_source=request.max_per_source))
+                if ok_ids is not None:
+                    ok_ids.add(source.id)
             except Exception as exc:
                 errors.append(f"{source.id}: {exc}")
                 if request.scope in {"mixed", "topic", "following-topic"}:
@@ -428,6 +569,11 @@ def collect_pack(
                         except Exception as fallback_exc:
                             errors.append(f"fallback:{source.id}:{term}: {fallback_exc}")
 
+    fetch_scope = request.scope in {"following", "mixed", "following-topic", "links"}
+    fetched_ids: set = set()
+    if not offline and fetch_scope:
+        crawl_sources(due_sources, fetched_ids)
+
     if not offline and request.scope in {"topic", "mixed", "following-topic"}:
         allowed_mids = {source.mid for source in resolved_sources if source.mid}
         for term in query_terms:
@@ -441,13 +587,25 @@ def collect_pack(
             except Exception as exc:
                 errors.append(f"search:{term}: {exc}")
 
+    # Sources that are not due yet are served from the local cache.
+    reused_videos: List[Video] = []
+    if skipped_sources and fetch_scope:
+        reused_videos = filter_videos_by_sources(load_videos_jsonl(args.videos), skipped_sources)
+
+    # Only videos actually pulled from the network in this run get the per-video
+    # accessibility probe (one HTTP request each). Cache-served entries were
+    # validated when they were crawled and get re-checked on their next refresh.
+    # This must be captured before the cache fallback below, otherwise a run that
+    # fetched nothing would mark the whole cache as "fresh" and probe every entry.
+    fresh_keys = {video.fingerprint for video in raw_videos if video.fingerprint}
+
     used_cache_fallback = False
-    if not raw_videos:
+    if not raw_videos and not reused_videos:
         raw_videos = load_videos_jsonl(args.videos)
         used_cache_fallback = True
         if request.scope in {"following", "following-topic", "links"} and resolved_sources:
             raw_videos = filter_videos_by_sources(raw_videos, resolved_sources)
-    raw_videos = [refresh_video_flags(video) for video in raw_videos]
+    raw_videos = [refresh_video_flags(video) for video in raw_videos + reused_videos]
     cached_videos = upsert_videos_jsonl(args.videos, raw_videos)
     raw_keys = {video.fingerprint for video in raw_videos if video.fingerprint}
     current_videos = [video for video in cached_videos if video.fingerprint in raw_keys] if raw_keys else []
@@ -455,65 +613,57 @@ def collect_pack(
         current_videos = raw_videos
 
     recent = recent_bvids(state, request.dedupe_window_days)
-    eligible: List[Video] = []
-    removed = Counter()
     from .topic_profile import load_profile as _load_profile
     _topic_profile = _load_profile(request.topic, data_dir(), resolve_ai_api_key(getattr(args, "ai_key", "") or ""))
     # Apply dimension-based + smart keyword filtering from user notes
     from .filters import apply_filter_dimensions
     _topic_profile = apply_filter_dimensions(_topic_profile, request.notes or "")
-    require_follow_along = requires_follow_along_filter(_topic_profile)
-    stale_bvids: set = set()
-    for video in current_videos:
-        # Match on the fingerprint the history actually stores, with the bare
-        # bvid as fallback for entries written before fingerprints existed.
-        if (video.fingerprint and video.fingerprint in recent) or (video.bvid and video.bvid in recent):
-            removed["recent"] += 1
-            continue
-        if request.exclude_restricted and video.restricted_access:
-            removed["restricted"] += 1
-            continue
-        if request.exclude_commercial and video.commercial:
-            removed["commercial"] += 1
-            continue
-        if request.duration_min and video.duration_minutes and video.duration_minutes < request.duration_min:
-            removed["duration_min"] += 1
-            continue
-        if request.duration_max and video.duration_minutes and video.duration_minutes > request.duration_max:
-            removed["duration_max"] += 1
-            continue
-        # Low-quality filter: skip videos with fewer plays than the threshold.
-        # Applies only when view_count is known (>0) to avoid filtering followed-UP content
-        # that may not yet have high counts. For search results, default is 100.
-        if request.min_view_count and video.view_count and video.view_count < request.min_view_count:
-            removed["low_quality"] += 1
-            continue
-        if require_follow_along and _topic_profile:
-            follow_along, _notes = detect_follow_along(video, _topic_profile)
-            if not follow_along:
-                removed["non_follow_along"] += 1
+
+    eligible, removed, stale_bvids = _filter_candidates(
+        current_videos, request, recent, _topic_profile, crawler, offline, fresh_keys
+    )
+
+    # ── Cadence escape hatch ────────────────────────────────────────────────
+    # If the locally cached material does not yield enough qualifying candidates
+    # (recently-used, commercial, duration, follow-along and posture filters all
+    # applied), crawl the sources that were skipped this run after all.
+    refetch_triggered = False
+    if not offline and skipped_sources and min_candidates > 0 and len(eligible) < min_candidates:
+        refetch_triggered = True
+        # Relevant sources first, and stop as soon as the pool is big enough.
+        for source in _order_sources_by_relevance(skipped_sources, request.topic):
+            if len(eligible) >= min_candidates:
+                break
+            already = len(raw_videos)
+            crawl_sources([source], fetched_ids)
+            newly_fetched = [refresh_video_flags(video) for video in raw_videos[already:]]
+            if not newly_fetched:
                 continue
-        # Space constraint enforcement: when user specifies posture (站立/坐姿),
-        # reject videos that don't explicitly declare a matching posture in title/desc.
-        if _topic_profile.required_space_terms:
-            searchable = video.searchable_text()
-            if not any(term in searchable for term in _topic_profile.required_space_terms):
-                removed["wrong_posture"] += 1
-                continue
-        # Accessibility check: skip videos that have been deleted or made private since crawl.
-        # Runs after all other filters to minimize API calls. Results are cached per crawler instance.
-        if not offline and video.platform == "bilibili" and video.bvid:
-            if not crawler._bili.check_video_accessible(video.bvid):
-                removed["inaccessible"] += 1
-                stale_bvids.add(video.bvid)
-                continue
-        eligible.append(video)
+            fresh_keys.update(video.fingerprint for video in newly_fetched if video.fingerprint)
+            merged_again = upsert_videos_jsonl(args.videos, newly_fetched)
+            new_keys = {video.fingerprint for video in newly_fetched if video.fingerprint}
+            current_videos = current_videos + [video for video in merged_again if video.fingerprint in new_keys]
+            eligible, extra_removed, extra_stale = _filter_candidates(
+                current_videos, request, recent, _topic_profile, crawler, offline, fresh_keys
+            )
+            removed.update(extra_removed)
+            stale_bvids = stale_bvids | extra_stale
 
     # Prune inaccessible videos from the local cache so they don't pollute future runs
     if stale_bvids and not offline:
         pruned = remove_inaccessible_bvids(args.videos, stale_bvids)
         if pruned:
             removed["cache_pruned"] = pruned
+
+    # ── Crawl bookkeeping ───────────────────────────────────────────────────
+    # Crawled sources reset their run counter; skipped ones count one more run.
+    if not offline and resolved_sources:
+        for source in resolved_sources:
+            if source.id in fetched_ids:
+                sync_state[source.id] = mark_source_fetched()
+            else:
+                sync_state[source.id] = bump_source_skipped(sync_state.get(source.id))
+        save_source_sync(sync_path, sync_state)
 
     stats = build_candidate_stats(eligible)
     # Minimum candidate ratio check: warn if eligible < 3× output days
@@ -542,6 +692,12 @@ def collect_pack(
             "cookie_source": cookie_source or "",
             "used_cache_fallback": used_cache_fallback,
             "offline": offline,
+            "sources_refreshed": len(fetched_ids),
+            "sources_from_cache": len([s for s in resolved_sources if s.id not in fetched_ids]),
+            "refetch_triggered": refetch_triggered,
+            "source_refresh_every_runs": every_runs,
+            "source_refresh_every_days": every_days,
+            "min_candidates_before_refetch": min_candidates,
         }
     )
     pack = CandidatePack(
@@ -711,12 +867,11 @@ def cmd_wizard(args: argparse.Namespace) -> int:
 
     # Wizard input needs no separate write: cmd_plan below records this session,
     # notes and durations included, into the same rolling log.
-    # Use parser defaults for plan subcommand, then override wizard-specific values
-    parser = build_parser()
-    try:
-        namespace = parser.parse_args(["plan"])
-    except SystemExit:
-        namespace = argparse.Namespace()
+    # Keep the workflow flags the user passed to `wizard` itself (--offline,
+    # --days, --platform, --sources …) and override only the fields collected
+    # above. Rebuilding the namespace from `plan` defaults silently dropped them.
+    namespace = argparse.Namespace(**vars(args))
+    namespace.record = True  # plan subcommand default; wizard has no --record flag
     namespace.scope = scope
     namespace.topic = topic
     namespace.freshness = freshness

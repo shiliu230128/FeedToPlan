@@ -17,13 +17,11 @@ _FORMAT_MISSING = (
 
 
 def format_doc_path() -> Optional[Path]:
-    """Locate references/planning_prompt.md in either the skill or public layout."""
+    """Locate references/planning_prompt.md in the project-root layout."""
     here = Path(__file__).resolve()
     candidates = [
         project_root() / FORMAT_DOC_RELATIVE,
-        project_root() / "skill" / "bilibili-arrangement3" / FORMAT_DOC_RELATIVE,
         here.parents[2] / FORMAT_DOC_RELATIVE,
-        here.parents[2] / "skill" / "bilibili-arrangement3" / FORMAT_DOC_RELATIVE,
     ]
     for path in candidates:
         if path.is_file():

@@ -18,6 +18,7 @@ Bilibili-specific crawler. Wraps the Bilibili API (search, UP space, single
 video) and normalises results into the shared Video / Source dataclasses.
 """
 from .filters import detect_commercial_content, detect_restricted_access
+from .net import ssl_context
 from .models import (
     Source,
     Video,
@@ -109,6 +110,10 @@ class BiliCrawler:
         self.pause_seconds = pause_seconds
         self.enrich_tags = enrich_tags
         self._wbi_mixin_key = ""
+        # mid -> resolved UP name. collect_pack resolves every source up front and
+        # fetch_up_videos resolves again, which used to cost two /x/web-interface/card
+        # requests per source for identical data.
+        self._profile_names: Dict[str, str] = {}
 
     def resolve_source(self, source: Source) -> Source:
         if source.kind != "up":
@@ -122,8 +127,28 @@ class BiliCrawler:
                 notes=source.notes,
                 added_at=source.added_at,
             )
+        mid = source.mid
+        cached_name = self._profile_names.get(mid)
+        if cached_name:
+            return replace(
+                source,
+                name=cached_name,
+                url=source.url or f"https://space.bilibili.com/{mid}",
+                mid=mid,
+            )
+        if source.name:
+            # config/sources.json 里已经有 mid 和名字，没必要为了再取一次名字
+            # 发一次 /x/web-interface/card 请求。这只影响显示名，不影响抓取。
+            self._profile_names[mid] = source.name
+            return replace(
+                source,
+                url=source.url or f"https://space.bilibili.com/{mid}",
+                mid=mid,
+            )
         try:
-            return self.fetch_up_profile(source)
+            resolved = self.fetch_up_profile(source)
+            self._profile_names[mid] = resolved.name
+            return resolved
         except Exception:
             import sys
             print(f"[warn] 无法获取 UP {source.url} 主页信息，使用原始来源", file=sys.stderr)
@@ -420,9 +445,11 @@ class BiliCrawler:
             "platform": "web",
             "web_location": "1550101",
         }
-        endpoints = [
-            ("https://api.bilibili.com/x/space/arc/search", {"mid": mid, "pn": 1, "ps": max_per_source, "order": "pubdate"}),
-        ]
+        # Signed endpoint first: B站 now rejects the legacy unsigned one with
+        # 「访问权限不足」 for every request, so trying it first wasted one round
+        # trip per source (17 sources ≈ 16s) on nothing. It stays as a fallback
+        # for the case where WBI key retrieval fails.
+        endpoints: List[tuple[str, Dict[str, Any]]] = []
         try:
             endpoints.append(
                 (
@@ -433,6 +460,9 @@ class BiliCrawler:
         except Exception:
             import sys
             print(f"[warn] WBI 签名失败，使用非签名端点", file=sys.stderr)
+        endpoints.append(
+            ("https://api.bilibili.com/x/space/arc/search", {"mid": mid, "pn": 1, "ps": max_per_source, "order": "pubdate"}),
+        )
         return endpoints
 
     def check_video_accessible(self, bvid: str) -> bool:
@@ -493,7 +523,7 @@ class BiliCrawler:
         backoff = 1.0
         for attempt in range(4):
             try:
-                with urlopen(request, timeout=self.timeout) as response:
+                with urlopen(request, timeout=self.timeout, context=ssl_context()) as response:
                     text = response.read().decode("utf-8", errors="replace")
             except HTTPError as exc:
                 if exc.code in (412, 429) and attempt < 3:
@@ -526,7 +556,9 @@ class BiliCrawler:
             for key, value in sorted(signed.items(), key=lambda item: item[0])
         }
         query = urlencode(cleaned)
-        signed["wrid"] = hashlib.md5((query + mixin_key).encode("utf-8")).hexdigest()
+        # B站 要求签名字段名是 w_rid（带下划线）；写成 wrid 等于没送签名，
+        # 空间投稿接口会直接返回「访问权限不足」。
+        signed["w_rid"] = hashlib.md5((query + mixin_key).encode("utf-8")).hexdigest()
         return signed
 
     def _get_wbi_mixin_key(self) -> str:

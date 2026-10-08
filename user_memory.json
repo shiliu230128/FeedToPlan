@@ -1,0 +1,20 @@
+{
+  "schema_version": 3,
+  "last_updated": "2026-08-18",
+  "episodic": [
+    {
+      "date": "2026-08-14",
+      "topic": "瑜伽",
+      "user_note": "脱敏离线冒烟验证",
+      "params": {
+        "scope": "mixed",
+        "freshness": "latest"
+      }
+    }
+  ],
+  "update_policy": {
+    "episodic_max_entries_per_topic": 10,
+    "context_window_days": 45,
+    "context_entries": 3
+  }
+}

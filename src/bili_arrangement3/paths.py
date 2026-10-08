@@ -23,6 +23,11 @@ def cache_dir() -> Path:
     return data_dir() / "cache"
 
 
+def source_sync_path() -> Path:
+    """Bookkeeping for when each followed source was last crawled."""
+    return cache_dir() / "source_sync.json"
+
+
 def runs_dir() -> Path:
     return project_root() / "outputs" / "runs"
 

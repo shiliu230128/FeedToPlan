@@ -22,6 +22,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .models import Source, Video, dedupe_keep_order, utc_now_iso
+from .net import ssl_context
 
 
 _BASE = "https://www.googleapis.com/youtube/v3"
@@ -217,7 +218,7 @@ class YouTubeCrawler:
         req = Request(url, headers={"Accept": "application/json"})
         time.sleep(self.pause_seconds)
         try:
-            with urlopen(req, timeout=20) as resp:
+            with urlopen(req, timeout=20, context=ssl_context()) as resp:
                 return json.loads(resp.read().decode())
         except Exception as exc:
             raise YTCrawlerError(f"YouTube API error ({endpoint}): {exc}") from exc

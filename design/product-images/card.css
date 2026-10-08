@@ -1,0 +1,165 @@
+/* B站私人编排器 · 商品图套卡
+   1080 × 1440，视觉语言取自产品自己的产出物：一份排期表 */
+
+:root{
+  --paper:#F5F6F8;
+  --ink:#14161F;
+  --ink-2:#2A2E3A;
+  --pink:#FB7299;
+  --pink-deep:#BC2F5B;
+  --blue:#0090C0;
+  --mute:#7C828F;
+  --line:#DCE0E7;
+  --serif:"Songti SC","STSong",serif;
+  --sans:"PingFang SC","Hiragino Sans GB",sans-serif;
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1440px}
+body{
+  font-family:var(--sans);
+  color:var(--ink);
+  background:var(--paper);
+  overflow:hidden;
+}
+.card{
+  position:relative;
+  width:1080px;height:1440px;
+  padding:96px 88px 84px;
+  display:flex;flex-direction:column;
+}
+
+/* ---------- 页脚 ---------- */
+.pg-foot{
+  margin-top:auto;padding-top:34px;
+  border-top:1px solid var(--line);
+  display:flex;justify-content:space-between;align-items:baseline;
+  font-size:24px;color:var(--mute);
+}
+.pg-foot .who{font-family:var(--serif);letter-spacing:.04em}
+
+/* ---------- 章节头 ---------- */
+.pg-head{margin-bottom:66px}
+.ord{
+  display:block;font-family:var(--serif);
+  font-size:36px;color:var(--pink);letter-spacing:.14em;
+}
+h2{
+  font-family:var(--serif);font-weight:400;
+  font-size:78px;line-height:1.18;letter-spacing:-.01em;margin-top:8px;
+}
+
+/* ---------- 正文 ---------- */
+.lead{font-size:41px;line-height:1.74;letter-spacing:.005em}
+.lead em{font-style:normal;color:var(--pink-deep)}
+
+/* 通用粉色竖条标记（列表项结构，不是装饰） */
+.marked{position:relative;padding-left:34px}
+.marked::before{
+  content:"";position:absolute;left:0;top:8px;
+  width:8px;background:var(--pink);
+}
+
+/* ================= 封面 ================= */
+.cover{background:var(--pink);padding:108px 88px 84px}
+.cover .kicker{
+  font-size:28px;letter-spacing:.18em;color:rgba(20,22,31,.7);
+}
+.cover h1{
+  font-family:var(--serif);font-weight:400;
+  font-size:132px;line-height:1.07;letter-spacing:-.02em;
+  margin-top:40px;
+}
+.cover .sub{
+  font-size:36px;line-height:1.68;margin-top:44px;
+}
+.cover .claim{
+  font-family:var(--serif);font-size:46px;line-height:1.52;
+  margin-top:46px;
+}
+
+.week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:auto;min-height:376px}
+.week .day{
+  background:rgba(255,255,255,.44);
+  padding:26px 14px 22px;
+  display:flex;flex-direction:column;
+}
+.week .dow{font-family:var(--serif);font-size:26px;color:rgba(20,22,31,.55)}
+.week .what{font-size:24px;line-height:1.4;margin-top:18px}
+.week .len{
+  font-size:22px;margin-top:auto;align-self:flex-start;
+  padding:7px 12px;background:rgba(255,255,255,.66);color:#3A3E4A;
+}
+.week .day.today{background:var(--ink)}
+.week .day.today .dow{color:rgba(251,114,153,.92)}
+.week .day.today .what{color:#fff}
+.week .day.today .len{background:rgba(255,255,255,.18);color:#fff}
+
+/* ================= 为什么需要：两列对比 ================= */
+.compare{display:grid;grid-template-columns:1fr 1fr;margin-top:62px}
+.compare .col{padding-right:48px}
+.compare .col + .col{border-left:1px solid var(--line);padding-left:48px;padding-right:0}
+.col-h{font-family:var(--serif);font-size:39px;margin-bottom:32px}
+.manual .col-h{color:var(--mute)}
+.steps{display:flex;flex-direction:column;gap:30px}
+.step{position:relative;padding-left:30px;font-size:32px;line-height:1.48}
+.step::before{
+  content:"";position:absolute;left:0;top:16px;
+  width:12px;height:12px;background:#C3C9D4;
+}
+.manual .step{color:var(--mute)}
+.auto .step::before{background:var(--pink)}
+.auto .step{color:var(--ink)}
+
+.closing{margin-top:auto;position:relative;padding-left:34px}
+.closing::before{
+  content:"";position:absolute;left:0;top:8px;width:8px;height:88px;
+  background:var(--pink);
+}
+.closing p{font-family:var(--serif);font-size:36px;line-height:1.58}
+
+/* ================= 为什么好用 ================= */
+.feats{display:flex;flex-direction:column;gap:86px}
+.feat::before{height:76px}
+.feat h3{font-family:var(--serif);font-weight:400;font-size:54px;line-height:1.3}
+.feat p{font-size:35px;line-height:1.74;color:var(--mute);margin-top:18px}
+
+/* ================= 示例 ================= */
+.exs{display:flex;flex-direction:column;gap:60px}
+.ex-h{
+  font-family:var(--serif);font-size:29px;color:var(--blue);
+  letter-spacing:.1em;margin-bottom:18px;
+}
+.ex p{font-size:35px;line-height:1.64}
+.tags{display:flex;flex-wrap:wrap;gap:13px;margin-top:24px}
+.tag{font-size:27px;padding:12px 21px;background:rgba(251,114,153,.15);color:var(--pink-deep)}
+
+/* ================= 怎么获取：三步 ================= */
+.gets{display:flex;flex-direction:column;gap:78px}
+.get-h{
+  font-family:var(--serif);font-size:28px;color:var(--pink);
+  letter-spacing:.12em;
+}
+.get h3{font-family:var(--serif);font-weight:400;font-size:52px;line-height:1.3;margin-top:16px}
+.get p{font-size:33px;line-height:1.7;color:var(--mute);margin-top:16px}
+.payoff{
+  margin-top:auto;padding-top:42px;border-top:1px solid var(--line);
+  font-family:var(--serif);font-size:42px;line-height:1.5;
+}
+
+/* ================= 问答 ================= */
+.qa{display:flex;flex-direction:column}
+.qa .item{padding:50px 0;border-top:1px solid var(--line)}
+.qa .item:first-child{border-top:0;padding-top:0}
+.qa .q{
+  font-family:var(--serif);font-size:43px;line-height:1.44;
+  position:relative;padding-left:60px;
+}
+.qa .q::before{
+  content:"问";position:absolute;left:0;top:6px;
+  font-family:var(--serif);font-size:31px;color:var(--pink);
+}
+.qa .a{
+  font-size:32px;line-height:1.8;color:var(--ink-2);
+  margin-top:24px;padding-left:60px;
+}

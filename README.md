@@ -62,7 +62,7 @@ python3 --version
 如果项目在 Finder 里：选中文件夹，按住 `Option`，右键点击文件夹，选择"复制 xxx 的路径名"。复制到的内容通常类似：
 
 ```text
-/Users/你的用户名/Desktop/my bili arrangement3-public
+/Users/你的用户名/Desktop/FeedToPlan-main
 ```
 
 然后在终端执行下面两行。第一行里的路径直接粘贴你刚才复制到的项目路径：
@@ -101,23 +101,60 @@ Cookie 是让程序以你的登录身份访问 B站的凭证，用来读取关�
 
 **第 2 步：写入配置**
 
-为了方便操作，**先在终端里把下面这行命令粘贴好，但先不要按回车**：
+先在终端里把下面这行命令粘贴好，**但先不要按回车**：
 
 ```bash
-pbpaste | bili-arrangement3 auth set-cookie --stdin
+pbpaste | bili-arrangement3 auth set-cookie --stdin; echo "EXIT=$?"
 ```
 
-然后回到浏览器，按上述第 1 步复制了 Cookie 之后，再切回终端，直接按回车执行。
+然后回到浏览器，按第 1 步复制好 Cookie，再切回终端按回车执行。
 
-> 小技巧：也可以在第 2 步先不粘 `pbpaste` 那一行，而是在终端输入 `bili-arrangement3 auth set-cookie --stdin` 然后按回车（这时终端会等待输入），再粘贴 Cookie 内容，按 `Ctrl+D`（Mac）或 `Ctrl+Z` 后回车（Windows）结束输入。两种方式都可以。
+末尾那句 `echo "EXIT=$?"` 是故意加的：无论成功还是失败它都会打印一行。没有它的话，一旦命令没被真正提交，屏幕上会干干净净什么都不显示，你完全看不出是"失败了"还是"根本没跑"。
 
-**第 3 步：验证**
+**第 3 步：看输出判断结果**
+
+成功时屏幕上必须出现这三行：
+
+```
+cookie_saved=/你的项目路径/.secrets/bilibili_cookie.txt
+cookie_length=1144
+EXIT=0
+```
+
+（`cookie_length` 在几百到两千之间都正常，上面的 `1144` 只是本次的实际值，不必一样。）
+
+对照判断：
+
+| 屏幕显示 | 判断 |
+|---|---|
+| `cookie_saved=…` + `cookie_length=` 几百以上 + `EXIT=0` | ✅ 写入成功，继续第 4 步 |
+| `cookie_length` 是 0 或两位数 | ⚠️ 剪贴板里不是完整 Cookie（空的或别的内容），回浏览器重新复制 |
+| `EXIT=127` 或 `command not found` | ⚠️ 命令没找到，PATH 有问题 |
+| 屏幕上**完全没有 `EXIT=`** | ⚠️ 命令没真正执行 —— 粘贴后没按回车，或粘到了别的地方 |
+
+**Cookie 里必须含 `SESSDATA`**（它是 B站的登录凭证）。Network 面板里并非每条请求都带完整的 Cookie，容易复制到只含设备指纹的残缺版本。更稳的做法是在开发者工具里点 **Application（应用程序）** → 左侧 **Storage → Cookies → `https://www.bilibili.com`**，在表格里找到 `SESSDATA`、`bili_jct`、`DedeUserID` 三行，**双击 Value 单元格**分别复制，再拼成一行：
+
+```bash
+bili-arrangement3 auth set-cookie --stdin <<< "SESSDATA=第一个值; bili_jct=第二个值; DedeUserID=第三个值"
+```
+
+> 小技巧：也可以先只输入 `bili-arrangement3 auth set-cookie --stdin` 再回车（这时终端会等待输入），然后粘贴 Cookie，按 `Ctrl+D`（Mac）或 `Ctrl+Z` 后回车（Windows）结束输入。它会先打印一行提示语等你输入，所以能一眼看出命令确实启动了。
+
+**第 4 步：验证**
 
 ```bash
 bili-arrangement3 auth status
 ```
 
-看到 `cookie_configured=true` 就配置成功。
+看到 `cookie_configured=true` 只说明文件写进去了，**不代表这份 Cookie 还有效**。想确认真能登录，再跑一条：
+
+```bash
+curl -s -H "Cookie: $(cat ~/.config/bili-secrets/bilibili_cookie.txt)" \
+  "https://api.bilibili.com/x/web-interface/nav" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print('isLogin =',(d.get('data') or {}).get('isLogin'))"
+```
+
+看到 `isLogin = True` 才算真正配置成功。如果这里仍然是 `False`，说明 Cookie 已失效或复制不完整，回第 1 步重新获取；实在不行先在浏览器里退出登录再重新登录一次。
 
 > Cookie 会写入项目内 `.secrets/bilibili_cookie.txt`，也会同步写入 `~/.config/bili-secrets/bilibili_cookie.txt`，方便以后项目改名或复制后继续使用。不要把 `.secrets/` 分享给别人。
 
@@ -135,30 +172,45 @@ bili-arrangement3 auth status
 
 **skill 文件在哪**
 
-刚才安装项目时 `cd` 进去的那个文件夹，里面有一个 `skill/bilibili-arrangement3/` 子文件夹，包含：
+刚才安装项目时 `cd` 进去的那个文件夹（也就是项目根目录），本身就是这个 skill 所在的位置，包含：
 
 - `SKILL.md` — 告诉 AI 怎么使用这个工具的主提示词
 - `references/` — 编排规则、用户引导模板
+- `agents/openai.yaml` — 面向 OpenAI / Codex 之类平台的 agent 配置
 
-**如何安装 skill（按你的平台选一种）**
+**如何安装 skill（选一种即可）**
 
-- **Comate（桌面版 / CLI）：** 在终端里把下面路径中的文件夹位置换成你实际的，然后执行：
+- **最省事：一句话让 AI 自己装。** 如果这个 AI 平台能在本地运行命令（Comate、Claude Code、Cursor、CodeBuddy 等），你不用自己动手，直接在对话里说：
+
+  > 帮我把 skill 装上，项目在 /Users/你的用户名/Desktop/FeedToPlan-main
+
+  AI 会自己执行安装命令，或把 `SKILL.md`、`references/` 放到平台要求的位置，装完会告诉你结果。这是最省事的方式，推荐先试这个。
+
+- **Comate（桌面版 / CLI）手动装：** 在终端里把下面的路径换成你实际的项目文件夹路径，然后执行：
 
   ```bash
-  comate skill add "你的项目文件夹路径/skill/bilibili-arrangement3"
+  comate skill add "你的项目文件夹路径"
   ```
 
-  如果不确定项目路径，在 Finder 里选中项目文件夹，`Option + 右键` → "复制路径名"，然后把结果拼上 `/skill/bilibili-arrangement3`。
+  如果不确定项目路径，在 Finder 里选中项目文件夹，`Option + 右键` → "复制路径名"，把复制到的路径直接填进去即可。
 
 - **Claude Code / CodeBuddy / Cursor / 其他支持 skill 或 MCP 的平台：**
-  找到项目里的 `skill/bilibili-arrangement3/` 整个文件夹，在平台的 skill / MCP 管理界面里导入或上传。每种平台的操作入口不一样，具体参考该平台的 skill 添加文档。
+  找到项目根目录里的 `SKILL.md` 和 `references/`，在平台的 skill / MCP 管理界面里导入或上传。每种平台的操作入口不一样，具体参考该平台的 skill 添加文档。
 
 - **不支持安装 skill 的平台：**
-  如果平台没有 skill 导入功能，可以打开 `skill/bilibili-arrangement3/SKILL.md`，把全文复制粘贴到平台的"系统提示词"或"自定义指令"设置里。效果接近，只是每次对话时需要先告诉 AI 你的项目路径。
+  如果平台没有 skill 导入功能，可以打开项目根目录的 `SKILL.md`，连同 `references/` 里的内容一起复制粘贴到平台的"系统提示词"或"自定义指令"设置里。效果接近，只是每次对话时需要先告诉 AI 你的项目路径。
 
-skill 配置好之后，在 AI 对话里直接说需求，例如：
+**装好之后就能直接对话了吗**
+
+能。skill 装好就完事了，不需要再做别的配置。新开一个 AI 对话，直接说需求：
 
 > 帮我生成这周的瑜伽跟练计划，每天早上30分钟，目标是缓解久坐肩颈问题，膝盖不太好，避免深蹲和跳跃。
+
+三点提醒：
+
+- 前提是第一步的安装已经做完（终端里 `bili-arrangement3 --help` 能正常输出）。
+- 部分平台要**新开一个对话**（或重启应用）才会加载新装的 skill，在当前这个旧对话里可能还认不出来。
+- AI 需要知道项目在哪。多数情况它会自己找到；如果它说找不到项目或 `bili-arrangement3` 命令，补一句就行：「项目在 `/你的/项目路径`，命令请从那里运行」。
 
 AI 会自动完成：理解需求 → 调用本地抓取 → 过滤内容 → 生成候选池 → 读取 prompt → 最终编排。
 
@@ -250,6 +302,21 @@ Cookie 可能失效了。重新按"第二步"获取并写入一次 Cookie。
 **Q: 抓出来的内容很少或候选池为空？**
 可能是 B站频率限制、关注列表里相关 UP 太少，或主题太窄。可以等 30 秒再重试，也可以使用全站搜索：`bili-arrangement3 plan --scope topic --topic "你的主题"`。
 
+**Q: 每次运行都会重新抓一遍我关注的博主吗？**
+不会。**关注名单**固定在 `config/sources.json`；**名单里每个 UP 的投稿**有抓取节奏：距上次抓取满 **6 次运行**或满 **10 天**，才重新联网拉一次，其余时候直接用本地缓存 `data/cache/videos.jsonl`。
+
+另外有个兜底：如果缓存里**符合你本次要求**的内容（排除近期用过的、付费充电的、商业推广的、时长不符的）**不足 20 条**，程序会按"与当前主题的相关度"从高到低补抓被你跳过的 UP，凑够就停。
+
+想调整节奏，改 `config/preferences.json`：
+
+```json
+"source_refresh_every_runs": 6,      // 满 6 次运行重拉；设 0 表示不看次数
+"source_refresh_every_days": 10,     // 满 10 天重拉；设 0 表示不看天数
+"min_candidates_before_refetch": 20  // 不足这么多条就补抓；设 0 表示关掉兜底
+```
+
+想立刻强制全量重拉一次，加 `--refresh`；想在断网时只用缓存，加 `--offline`。
+
 **Q: 我想换个主题，能用吗？**
 可以。直接说需求即可。内置主题会走内置词表；内置词表以外的主题，如果配置了 OpenAI API Key，会自动生成主题词表；没配置时会使用通用词表，效果略弱但仍可用。
 
@@ -278,7 +345,7 @@ B站部分搬运类视频生命周期极短（可能几小时内被下架）。�
 
 ```bash
 git clone <repo-url>
-cd bili-arrangement3
+cd FeedToPlan-main
 python3 -m pip install -e .        # 可编辑安装
 python3 -m unittest discover -s tests  # 运行测试
 ```
@@ -289,4 +356,4 @@ python3 -m unittest discover -s tests  # 运行测试
 
 ### Skill 独立安装
 
-项目自带的 AI skill 位于 `skill/bilibili-arrangement3/`。如果只想安装 skill 而不安装完整项目，可以下载 `skill/bilibili-arrangement3.zip`，在你的 AI 平台中导入该 zip 文件。
+项目自带的 AI skill 就在项目根目录：`SKILL.md` 是主提示词，`references/` 放编排规则和用户引导模板，`agents/openai.yaml` 是平台 agent 配置。把这几项复制到你的 AI 平台的 skill 目录，或直接把项目文件夹导入平台即可，不需要额外下载 zip 包。

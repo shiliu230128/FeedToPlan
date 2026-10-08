@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .models import Source, Video, dedupe_keep_order, merge_videos
 
@@ -12,6 +12,14 @@ from .models import Source, Video, dedupe_keep_order, merge_videos
 # Videos cache TTL: entries not refreshed within this many days are dropped.
 # ---------------------------------------------------------------------------
 VIDEO_CACHE_TTL_DAYS = 60
+
+# ---------------------------------------------------------------------------
+# Per-source crawl cadence. A followed UP is re-crawled from the network when
+# EITHER threshold trips: this many runs have passed, or this many days have.
+# Both are overridable from config/preferences.json.
+# ---------------------------------------------------------------------------
+SOURCE_REFRESH_EVERY_RUNS = 6
+SOURCE_REFRESH_EVERY_DAYS = 10
 
 # outputs/runs/ retention: keep this many most-recent run directories.
 RUNS_KEEP_COUNT = 15
@@ -145,6 +153,63 @@ def _parse_date_safe(value: str) -> "date | None":
         return date.fromisoformat(str(value or "")[:10])
     except ValueError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Followed-source crawl bookkeeping (data/cache/source_sync.json)
+# Shape: {"up-123": {"last_fetched_at": "2026-10-08", "runs_since_fetch": 0}}
+# ---------------------------------------------------------------------------
+
+def load_source_sync(path: Path) -> Dict[str, Dict[str, Any]]:
+    payload = load_json(path, {})
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in payload.items()
+        if isinstance(value, dict)
+    }
+
+
+def save_source_sync(path: Path, data: Dict[str, Dict[str, Any]]) -> None:
+    save_json(path, data)
+
+
+def source_is_due(
+    entry: Optional[Dict[str, Any]],
+    every_runs: int = SOURCE_REFRESH_EVERY_RUNS,
+    every_days: int = SOURCE_REFRESH_EVERY_DAYS,
+) -> bool:
+    """
+    True when a followed source should be re-crawled from the network.
+
+    A source with no bookkeeping entry has never been crawled, so it is due.
+    Either threshold tripping is enough; pass 0 to disable one of them.
+    """
+    if not entry:
+        return True
+    if every_runs > 0 and int(entry.get("runs_since_fetch") or 0) >= every_runs:
+        return True
+    if every_days > 0:
+        last = _parse_date_safe(entry.get("last_fetched_at", ""))
+        if last is None:
+            return True
+        if (date.today() - last).days >= every_days:
+            return True
+    return False
+
+
+def mark_source_fetched() -> Dict[str, Any]:
+    """Fresh bookkeeping entry for a source crawled in this run."""
+    return {"last_fetched_at": date.today().isoformat(), "runs_since_fetch": 0}
+
+
+def bump_source_skipped(entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Carry a source forward without crawling it, counting one more run."""
+    carried = dict(entry or {})
+    carried["runs_since_fetch"] = int(carried.get("runs_since_fetch") or 0) + 1
+    carried.setdefault("last_fetched_at", "")
+    return carried
 
 
 def load_state(path: Path) -> Dict[str, Any]:

@@ -120,7 +120,7 @@ def _rank_candidates(videos, request, slot, previous_owner, previous_source, use
         # Mixed / topic / following-topic: boost videos from followed sources
         followed_mids = {
             mid.strip()
-            for mid in (getattr(request, "_followed_mids", None) or [])
+            for mid in (getattr(request, "followed_mids", None) or [])
             if mid.strip()
         }
 

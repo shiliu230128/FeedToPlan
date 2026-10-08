@@ -8,6 +8,9 @@
   "exclude_commercial": true,
   "exclude_restricted": true,
   "max_per_source": 20,
-  "search_limit": 50
+  "search_limit": 50,
+  "http_pause_seconds": 0.8,
+  "source_refresh_every_runs": 6,
+  "source_refresh_every_days": 10,
+  "min_candidates_before_refetch": 20
 }
-
